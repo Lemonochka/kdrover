@@ -1,0 +1,14 @@
+[package]
+name = "kdrover-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "kdrover-cli"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+drover-core = { path = "../drover-core" }

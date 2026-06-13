@@ -1,0 +1,16 @@
+[package]
+name = "kdrover-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "kdrover"
+path = "src/main.rs"
+
+[dependencies]
+drover-core = { path = "../drover-core" }
+eframe = { version = "0.33", default-features = true, features = ["default_fonts", "glow"] }
+open = "5.3"
+windows = { version = "0.58", features = ["Win32_UI_WindowsAndMessaging"] }

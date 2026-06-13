@@ -1,0 +1,18 @@
+# Rust build artifacts
+/target/
+
+# Packaged distribution / release output
+/dist/
+*.zip
+
+# Debug symbols
+**/*.pdb
+
+# Local runtime config (only the .example is committed)
+/drover.ini
+
+# JetBrains IDE
+/.idea/
+
+# Claude Code local settings
+/.claude/settings.local.json

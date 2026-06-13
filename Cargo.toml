@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["drover-core", "kdrover-dll", "kdrover-cli", "kdrover-gui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["kdrover"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

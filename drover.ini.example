@@ -1,0 +1,11 @@
+[drover]
+; Proxy can use http or socks5 protocols. Leave empty for direct mode.
+proxy = http://127.0.0.1:8080
+
+; Voice UDP bypass when DPI blocks Discord voice (ping jumps to 5000 ms):
+;   auto   — drover-packet.bin if present, else embedded QUIC fake (default)
+;   quic   — QUIC fake only
+;   legacy — original 0x00/0x01 trick
+;   both   — QUIC/file + legacy (stock drover v0.9)
+;   none   — disable UDP manipulation
+udp-bypass = auto
