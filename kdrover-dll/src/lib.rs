@@ -20,15 +20,17 @@ pub unsafe extern "system" fn DllMain(module: HANDLE, reason: u32, _reserved: *m
         DLL_PROCESS_ATTACH => {
             let _ = DisableThreadLibraryCalls(HMODULE(module.0));
 
-            // Forward version APIs synchronously: Discord may query version info early,
-            // and loading the real version.dll by full path is loader-lock safe.
-            let _ = init_version_proxy();
-
-            // Everything else (option file I/O, LoadLibrary("ws2_32.dll"), detour
-            // installation) is forbidden under the loader lock that DllMain holds:
-            // LoadLibrary inside DllMain deadlocks the loader. Defer it to a worker
-            // thread, which only starts running once DllMain returns and the lock is
-            // released.
+            // Do NOTHING that can touch the loader here. LoadLibrary under the loader
+            // lock that DllMain holds can deadlock: if the target (or one of its
+            // dependencies) still needs its own DLL_PROCESS_ATTACH, the parallel loader
+            // parks this thread in LdrpDrainWorkQueue waiting on a work queue this very
+            // thread owns. That includes loading the real version.dll for the proxy.
+            //
+            // Defer everything — proxy resolution, option file I/O, ws2_32 load, detour
+            // installation — to a worker thread, which only starts running once DllMain
+            // returns and the loader lock is released. version exports that arrive before
+            // the worker has resolved the real DLL fall back to a lazy load (see
+            // version_proxy::get_proc).
             let _ = CreateThread(
                 None,
                 0,
@@ -46,6 +48,9 @@ pub unsafe extern "system" fn DllMain(module: HANDLE, reason: u32, _reserved: *m
 }
 
 unsafe extern "system" fn init_thread(_param: *mut c_void) -> u32 {
+    // Runs after the loader lock is released, so LoadLibrary is safe here. Resolve the
+    // real version.dll first so forwarded exports have a warm handle.
+    let _ = init_version_proxy();
     init_state();
     let _ = install_hooks();
     0

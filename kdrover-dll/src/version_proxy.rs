@@ -90,7 +90,16 @@ fn system_directory() -> windows::core::Result<String> {
 }
 
 fn get_proc(name: &str) -> Option<*const c_void> {
-    let handle = ORIGINAL_VERSION.get().copied()?;
+    // Warm handle from the worker thread in the common case; lazily load on demand if a
+    // version export arrives before the worker resolved it.
+    let handle = match ORIGINAL_VERSION.get().copied() {
+        Some(handle) => handle,
+        None => {
+            let module = load_system_version_dll().ok()?;
+            let _ = ORIGINAL_VERSION.set(module.0 as isize);
+            ORIGINAL_VERSION.get().copied()?
+        }
+    };
     let module = HMODULE(handle as _);
     let name = format!("{name}\0");
     unsafe {
