@@ -48,10 +48,17 @@ pub unsafe extern "system" fn DllMain(module: HANDLE, reason: u32, _reserved: *m
 }
 
 unsafe extern "system" fn init_thread(_param: *mut c_void) -> u32 {
-    // Runs after the loader lock is released, so LoadLibrary is safe here. Resolve the
-    // real version.dll first so forwarded exports have a warm handle.
-    let _ = init_version_proxy();
+    // Runs after the loader lock is released. Install hooks AS EARLY AS POSSIBLE: the
+    // socket/sendto detours must be live before Discord creates its voice socket and
+    // sends the first packet, otherwise the UDP bypass is missed and DPI throttles the
+    // flow (ping climbs to ~5k after a few seconds). Anything ahead of install_hooks
+    // here is pure latency on that race.
     init_state();
     let _ = install_hooks();
+
+    // Resolve the real version.dll last — it is off the critical path and forwarded
+    // exports lazily load it on first use anyway (see version_proxy::get_proc). Must
+    // stay out of DllMain: loading it under the loader lock deadlocks startup.
+    let _ = init_version_proxy();
     0
 }
