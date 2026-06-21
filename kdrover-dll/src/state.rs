@@ -149,13 +149,12 @@ pub fn copy_files_to_all_discord_dirs() {
         .unwrap_or_else(|| state.process_dir.clone());
 
     for dir in discord::find_discord_app_dirs(&base_dir) {
-        let dst_options = dir.join(options::OPTIONS_FILENAME);
         let dst_dll = dir.join(options::DLL_FILENAME);
 
-        if discord::dir_has_discord_executable(&dir)
-            && !dst_options.exists()
-            && !dst_dll.exists()
-        {
+        // Trigger on a missing version.dll alone: a freshly downloaded app-X.Y.Z folder
+        // has Discord.exe but none of our files, and that is exactly the dir we must
+        // populate before Discord restarts into it.
+        if discord::dir_has_discord_executable(&dir) && !dst_dll.exists() {
             let _ = options::copy_drover_files(&state.process_dir, &dir);
         }
     }

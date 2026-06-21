@@ -11,7 +11,7 @@ use windows::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DET
 use windows::Win32::System::Threading::{CreateThread, THREAD_CREATION_FLAGS};
 
 use crate::hooks::install_hooks;
-use crate::state::init_state;
+use crate::state::{copy_files_to_all_discord_dirs, init_state};
 use crate::version_proxy::init_version_proxy;
 
 #[no_mangle]
@@ -60,5 +60,15 @@ unsafe extern "system" fn init_thread(_param: *mut c_void) -> u32 {
     // exports lazily load it on first use anyway (see version_proxy::get_proc). Must
     // stay out of DllMain: loading it under the loader lock deadlocks startup.
     let _ = init_version_proxy();
-    0
+
+    // Self-heal across Discord updates. On update Discord ships a fresh app-X.Y.Z
+    // folder and relaunches it via the unhooked Update.exe, so our CreateProcessW hook
+    // never copies version.dll there and the bypass dies until a manual reinstall.
+    // Squirrel usually downloads the new folder well before the restart, so while this
+    // (old) Discord is still running we periodically mirror our files into any app dir
+    // that lacks them — the DLL is then already in place when Discord restarts into it.
+    loop {
+        copy_files_to_all_discord_dirs();
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
 }
