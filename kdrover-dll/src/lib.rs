@@ -10,7 +10,7 @@ use windows::Win32::System::LibraryLoader::DisableThreadLibraryCalls;
 use windows::Win32::System::SystemServices::{DLL_PROCESS_ATTACH, DLL_PROCESS_DETACH};
 use windows::Win32::System::Threading::{CreateThread, THREAD_CREATION_FLAGS};
 
-use crate::hooks::install_hooks;
+use crate::hooks::{install_hooks, spawn_voice_keepalive};
 use crate::state::{copy_files_to_all_discord_dirs, init_state};
 use crate::version_proxy::init_version_proxy;
 
@@ -55,6 +55,11 @@ unsafe extern "system" fn init_thread(_param: *mut c_void) -> u32 {
     // here is pure latency on that race.
     init_state();
     let _ = install_hooks();
+
+    // Keep the DPI fooled for the whole call, not just at connection start: re-send the
+    // fake UDP packet on active voice sockets on an interval. Without this, on flaky
+    // networks the flow gets re-throttled to ~5k ping mid-call until Discord reconnects.
+    spawn_voice_keepalive();
 
     // Resolve the real version.dll last — it is off the critical path and forwarded
     // exports lazily load it on first use anyway (see version_proxy::get_proc). Must

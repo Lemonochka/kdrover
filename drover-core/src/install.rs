@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::options::{
     copy_drover_files, load_options, remove_drover_files, save_options, DroverOptions,
-    BUILD_DLL_FILENAME, DLL_FILENAME, OPTIONS_FILENAME, PACKET_FILENAME,
+    BUILD_DLL_FILENAME, DEFAULT_UDP_KEEPALIVE_SECS, DLL_FILENAME, OPTIONS_FILENAME, PACKET_FILENAME,
 };
 use crate::udp_bypass::{write_default_packet, UdpBypassMode};
 use crate::proxy::ProxyValue;
@@ -142,6 +142,7 @@ impl InstallSettings {
         Ok(DroverOptions {
             proxy: self.build_proxy_url()?,
             udp_bypass: UdpBypassMode::Auto,
+            udp_keepalive_secs: DEFAULT_UDP_KEEPALIVE_SECS,
         })
     }
 }

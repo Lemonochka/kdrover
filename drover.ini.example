@@ -9,3 +9,8 @@ proxy = http://127.0.0.1:8080
 ;   both   — QUIC/file + legacy (stock drover v0.9)
 ;   none   — disable UDP manipulation
 udp-bypass = auto
+
+; Re-send the UDP fake packet on active voice sockets every N seconds so DPI keeps the
+; flow classified as harmless for the whole call. Without it, on flaky networks the ping
+; re-spikes to ~5000 ms mid-call until Discord reconnects. Set 0 to disable (send once).
+udp-keepalive = 15

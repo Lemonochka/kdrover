@@ -23,4 +23,4 @@ pub use install::{
     uninstall, InstallError, InstallSettings, ProxyMode,
 };
 pub use proxy::ProxyValue;
-pub use socket_manager::{SocketManager, SocketManagerItem};
+pub use socket_manager::{SocketManager, SocketManagerItem, VoiceTarget, SOCKADDR_MAX};

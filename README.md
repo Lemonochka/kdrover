@@ -54,7 +54,13 @@ Manual install: copy `version.dll` and `drover.ini` next to `Discord.exe`.
 ```ini
 [drover]
 proxy = http://127.0.0.1:8080
+udp-bypass = auto
+udp-keepalive = 15
 ```
+
+`udp-keepalive` is the interval, in seconds, at which the UDP fake packet is re-sent on
+active voice sockets so DPI keeps the flow misclassified for the whole call (set `0` to
+send it only once at connection start). See below.
 
 Supported formats:
 
@@ -78,6 +84,9 @@ kdrover-cli uninstall
 2. The DLL forwards real `version.dll` exports from `%SystemRoot%\System32`.
 3. Hooks on `GetEnvironmentVariableW`, `GetCommandLineW`, `CreateProcessW`, and Winsock APIs redirect TCP traffic through the configured proxy.
 4. First UDP packets on voice connections are modified to bypass local restrictions.
+5. On active voice sockets the fake UDP packet is re-sent every `udp-keepalive` seconds so
+   stateful DPI does not re-throttle a long call (the ~5000 ms ping spikes that otherwise
+   recur on unstable networks until Discord reconnects).
 
 ## License
 

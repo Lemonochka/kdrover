@@ -2,14 +2,17 @@ use once_cell::sync::OnceCell;
 use retour::GenericDetour;
 use std::ffi::{c_void, OsString};
 use std::os::windows::ffi::OsStringExt;
+use std::time::Duration;
 use windows::Win32::Foundation::{BOOL, HMODULE};
-use windows::Win32::Networking::WinSock::WSABUF;
+use windows::Win32::Networking::WinSock::{
+    WSAGetLastError, WSABUF, WSAEISCONN, WSAENOTSOCK,
+};
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
 use windows::Win32::System::IO::OVERLAPPED;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Threading::{PROCESS_INFORMATION, STARTUPINFOW};
 
-use drover_core::{http_auth, is_discord_executable, socks5, udp};
+use drover_core::{http_auth, is_discord_executable, socks5, udp, SOCKADDR_MAX};
 
 use crate::state::{copy_files_to_all_discord_dirs, state};
 
@@ -65,6 +68,7 @@ struct Hooks {
     recv: GenericDetour<FnRecv>,
     send_to: GenericDetour<FnSendTo>,
     raw_send_to: FnSendTo,
+    raw_send: FnSend,
 }
 
 static HOOKS: OnceCell<Hooks> = OnceCell::new();
@@ -87,6 +91,7 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
     let kernel32 = module_handle("kernel32.dll")?;
     let ws2_32 = module_handle("ws2_32.dll")?;
     let raw_send_to: FnSendTo = resolve_symbol(ws2_32, "sendto")?;
+    let raw_send: FnSend = resolve_symbol(ws2_32, "send")?;
 
     let hooks = Hooks {
         get_environment_variable_w: hook_from_module(
@@ -113,6 +118,7 @@ pub fn install_hooks() -> Result<(), Box<dyn std::error::Error>> {
         recv: hook_from_module(ws2_32, "recv", detour_recv as FnRecv)?,
         send_to: hook_from_module(ws2_32, "sendto", detour_send_to as FnSendTo)?,
         raw_send_to,
+        raw_send,
     };
 
     // Publish the (not-yet-enabled) hooks BEFORE enabling any of them. Once a hook
@@ -198,6 +204,90 @@ fn run_udp_voice_bypass(sock: usize, buffer_len: usize, to: *const c_void, to_le
         to_len,
         buffer_len,
     );
+}
+
+/// Copy a `sockaddr` out of Discord's memory into an owned buffer so it can be cached and
+/// reused later from the keepalive thread, long after this call's pointer is gone.
+fn read_sockaddr(to: *const c_void, to_len: i32) -> ([u8; SOCKADDR_MAX], usize) {
+    let mut buffer = [0u8; SOCKADDR_MAX];
+    if to.is_null() || to_len <= 0 {
+        return (buffer, 0);
+    }
+    let len = (to_len as usize).min(SOCKADDR_MAX);
+    unsafe {
+        std::ptr::copy_nonoverlapping(to as *const u8, buffer.as_mut_ptr(), len);
+    }
+    (buffer, len)
+}
+
+/// Re-send the UDP fake packet on each live voice socket every `udp-keepalive` seconds.
+///
+/// The one-shot bypass only poisons DPI at connection start. Stateful DPI re-inspects a
+/// long-lived UDP flow after its classification cache expires and starts throttling it —
+/// the ping spikes to ~5k until Discord reconnects and the bypass fires again. Repeating
+/// the fake QUIC/google packet keeps the 4-tuple classified as harmless traffic for the
+/// whole call. The fake is not a valid Discord voice packet, so the server drops it.
+pub fn spawn_voice_keepalive() {
+    let drover = state();
+    let secs = drover.options.udp_keepalive_secs;
+    if secs == 0 {
+        return;
+    }
+    let Some(packet) = udp::keepalive_packet(drover.options.udp_bypass, &drover.process_dir) else {
+        return;
+    };
+
+    std::thread::spawn(move || {
+        let interval = Duration::from_secs(secs);
+        loop {
+            std::thread::sleep(interval);
+
+            let drover = state();
+            let targets = drover.socket_manager.voice_targets();
+            if targets.is_empty() {
+                continue;
+            }
+
+            let Some(hooks) = HOOKS.get() else {
+                continue;
+            };
+
+            for target in targets {
+                let dest = target.dest.as_ptr() as *const c_void;
+                let sent = unsafe {
+                    (hooks.raw_send_to)(
+                        target.sock,
+                        packet.as_ptr(),
+                        packet.len() as i32,
+                        0,
+                        dest,
+                        target.dest_len,
+                    )
+                };
+
+                if sent >= 0 {
+                    continue;
+                }
+
+                let error = unsafe { WSAGetLastError() };
+                if error == WSAENOTSOCK {
+                    // The handle is no longer a socket: the call ended. Stop targeting it.
+                    drover.socket_manager.remove(target.sock);
+                } else if error == WSAEISCONN {
+                    // Discord connect()ed the socket after discovery; an explicit
+                    // destination is now rejected, so send on the connected peer instead.
+                    unsafe {
+                        let _ = (hooks.raw_send)(
+                            target.sock,
+                            packet.as_ptr(),
+                            packet.len() as i32,
+                            0,
+                        );
+                    }
+                }
+            }
+        }
+    });
 }
 
 unsafe extern "system" fn detour_get_environment_variable_w(
@@ -355,8 +445,9 @@ unsafe extern "system" fn detour_wsa_send_to(
 ) -> i32 {
     if !lp_buffers.is_null() && dw_buffer_count > 0 {
         let buffer = unsafe { &*lp_buffers };
-        if let Some(item) = state().socket_manager.is_first_send(sock) {
-            if item.is_udp && buffer.len == 74 {
+        if buffer.len == 74 {
+            let (dest, dest_len) = read_sockaddr(lp_to, i_to_len);
+            if state().socket_manager.mark_udp_bypass(sock, &dest[..dest_len]) {
                 with_hooks(|hooks| {
                     run_udp_voice_bypass(
                         sock,
@@ -393,13 +484,12 @@ unsafe extern "system" fn detour_send_to(
     to: *const c_void,
     to_len: i32,
 ) -> i32 {
-    if len > 0 && !buf.is_null() {
-        if let Some(item) = state().socket_manager.is_first_send(sock) {
-            if item.is_udp && len as usize == 74 {
-                with_hooks(|hooks| {
-                    run_udp_voice_bypass(sock, len as usize, to, to_len, hooks.raw_send_to);
-                });
-            }
+    if len as usize == 74 && !buf.is_null() {
+        let (dest, dest_len) = read_sockaddr(to, to_len);
+        if state().socket_manager.mark_udp_bypass(sock, &dest[..dest_len]) {
+            with_hooks(|hooks| {
+                run_udp_voice_bypass(sock, len as usize, to, to_len, hooks.raw_send_to);
+            });
         }
     }
 
